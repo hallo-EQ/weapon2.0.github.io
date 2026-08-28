@@ -1225,7 +1225,7 @@
             <div class="header-left">
                 <span class="header-icon">📂</span>
                 <div>
-                    <div class="header-title">批量文件重命名 · 规范版</div>
+                    <div class="header-title">批量文件重命名 · 规范版 <span id="versionBadge" style="font-size:12px;color:var(--text-3);font-weight:normal;margin-left:6px;">v2.7.5</span></div>
                     <div class="header-sub">严格遵循「命名规范及注意事项」</div>
                 </div>
             </div>
@@ -1817,20 +1817,36 @@
                 // 类别已识别为"同步练习"，该内容不进书名号、也不作为待选项（版本关键字 A卷/B卷 已在前面前提取）
                 title = title.replace(/[（(【][^（）()【】]*卷[^（）()【】]*[)）】]/g, ' ').replace(/\s+/g, ' ').trim();
 
+                // 检测"第X课时/节/讲"模式，将其后的内容包裹在括号中（如果尚未包裹）
+                // 例："化学研究什么  第1课时 化学研究物质的性质与变化" → "化学研究什么  （第1课时 化学研究物质的性质与变化）"
+                // 这样 extractInnerBrackets 能识别为书名号内括号
+                const lessonPattern = /第[零一二三四五六七八九十百千万\d]+(?:课时|节|讲)/g;
+                let lbMatch;
+                while ((lbMatch = lessonPattern.exec(title)) !== null) {
+                    const pos = lbMatch.index;
+                    const charBefore = pos > 0 ? title[pos - 1] : '';
+                    // 只有不在括号内时才包裹
+                    if (charBefore !== '（' && charBefore !== '(' && charBefore !== '【') {
+                        const before = title.substring(0, pos).trim();
+                        const after = title.substring(pos).trim();
+                        if (after) {
+                            title = (before ? before + ' ' : '') + '（' + after + '）';
+                        }
+                        break; // 只处理第一个未被包裹的匹配
+                    }
+                }
+
                 // 从 title 中提取书名号内括号内容，生成 innerBrackets 待选项
                 // 智能默认：类别关键字 selected=false（已识别为类别括号）；其他 selected=true
                 const innerBrackets = extractInnerBrackets(title);
 
-                // 从标题中移除括号内容（避免重复显示）
-                // 版本关键字已在前面移除，这里移除其他括号内容
-                for (const ib of innerBrackets) {
-                    // 移除整个括号
-                    const patterns = [
-                        new RegExp('[（(]' + escapeRegex(ib.text) + '[)）]', 'g'),
-                    ];
-                    for (const p of patterns) {
-                        title = title.replace(p, '');
-                    }
+                // 从标题中移除所有括号内容（避免重复显示）
+                // 循环剥离：处理嵌套括号（内层删掉后外层才能被清除）
+                let prev = '';
+                while (prev !== title) {
+                    prev = title;
+                    title = title.replace(/（[^（）]*）/g, '');
+                    title = title.replace(/\([^()]*\)/g, '');
                 }
                 // 清理移除括号后留下的多余空格
                 title = title.replace(/\s+/g, ' ').trim();
@@ -1881,6 +1897,9 @@
                 work = work.replace(/\d{4}\s*[-~至到～]\s*\d{2,4}/g, ' ');
                 // 纯符号串（2个及以上）：++, ---, ~~~, ===, **, ##, ——
                 work = work.replace(/[+\-~_=*#～—]{2,}/g, ' ');
+                // 清理标题首尾的孤立装饰符号（如 +化学研究什么+）
+                work = work.replace(/^[+\-~_=*#～—]+/, '');
+                work = work.replace(/[+\-~_=*#～—]+$/, '');
                 // 教育描述性文字清理（括号外的非标题内容）：
                 //   学年度/学年/学期（前面可能跟年份，年份已被清掉，留下的"学年度"单独删）
                 work = work.replace(/学年度?/g, ' ');
@@ -1925,17 +1944,22 @@
                 const parts = [];
                 if (!title) return parts;
                 let t = title.replace(/^《/, '').replace(/》$/, '');
-                // 使用贪婪匹配：确保完整匹配（...）或 (...) 内容
-                t = t.replace(/（[^（）]*）/g, function (m) {
-                    const x = m.replace(/^（|）$/g, '').trim();
-                    if (x) parts.push(x);
-                    return '';
-                });
-                t = t.replace(/\([^()]*\)/g, function (m) {
-                    const x = m.replace(/^\(|\)$/g, '').trim();
-                    if (x) parts.push(x);
-                    return '';
-                });
+                // 循环提取括号内容（处理嵌套括号：内层删掉后外层才能被匹配到）
+                // 例：（第1课时 ...（导学案）） → 先提（导学案），再提（第1课时 ...）
+                let prev = '';
+                while (prev !== t) {
+                    prev = t;
+                    t = t.replace(/（[^（）]*）/g, function (m) {
+                        const x = m.replace(/^（|）$/g, '').trim();
+                        if (x) parts.push(x);
+                        return '';
+                    });
+                    t = t.replace(/\([^()]*\)/g, function (m) {
+                        const x = m.replace(/^\(|\)$/g, '').trim();
+                        if (x) parts.push(x);
+                        return '';
+                    });
+                }
 
                 console.log('[extractInnerBrackets] title:', title, ', parts:', parts);
 
@@ -2090,18 +2114,21 @@
 
                 // ---- 提取书名号内的（）或()内容，查 item.innerBrackets 的 selected 状态 ----
                 const bracketParts = [];
-                // 匹配中文括号（），使用贪婪匹配确保完整匹配
-                title = title.replace(/（[^（）]*）/g, function (m) {
-                    const t = m.replace(/^（|）$/g, '').trim();
-                    if (t) bracketParts.push(t);
-                    return '';
-                });
-                // 匹配英文括号()，使用贪婪匹配确保完整匹配
-                title = title.replace(/\([^()]*\)/g, function (m) {
-                    const t = m.replace(/^\(|\)$/g, '').trim();
-                    if (t) bracketParts.push(t);
-                    return '';
-                });
+                // 循环提取括号内容（处理嵌套括号）
+                let prev = '';
+                while (prev !== title) {
+                    prev = title;
+                    title = title.replace(/（[^（）]*）/g, function (m) {
+                        const t = m.replace(/^（|）$/g, '').trim();
+                        if (t) bracketParts.push(t);
+                        return '';
+                    });
+                    title = title.replace(/\([^()]*\)/g, function (m) {
+                        const t = m.replace(/^\(|\)$/g, '').trim();
+                        if (t) bracketParts.push(t);
+                        return '';
+                    });
+                }
                 // 清除提取括号后留下的多余空格
                 title = title.trim().replace(/\s+/g, ' ');
                 if (!title) title = '未命名';
@@ -3626,7 +3653,7 @@
              * @param {boolean} [silent] 静默模式：不弹单个文件的成功 toast（由批量统一显示）
              * @returns {Promise<{success:boolean,error?:string,item:object,newName:string}>}
              */
-            async function saveSingleFile(id, reuseDirHandle, silent) {
+            async function saveSingleFile(id, reuseDirHandle, silent, forceNewDir) {
                 const item = fileItems.find(it => it.id === id);
                 if (!item) return { success: false, error: '文件不存在', item: null, newName: '' };
                 const newName = generateNewName(item);
@@ -3641,7 +3668,8 @@
                     if (reuseDirHandle || isFsaSupported()) {
                         let dirHandle = reuseDirHandle;
                         // 没有复用的目录句柄时，让用户选一次
-                        if (!dirHandle) {
+                        // forceNewDir=true 时强制重新选择（处理句柄失效导致的 NotFoundError 重试场景）
+                        if (!dirHandle || forceNewDir) {
                             dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
                         }
                         // 如果是文件夹上传的文件，按原相对路径递归创建子目录
@@ -3701,6 +3729,16 @@
                         item.saveError = '';
                         renderList();
                         return { success: false, error: '已取消', item, newName, aborted: true };
+                    }
+                    // InvalidStateError / NotFoundError：目录句柄缓存状态失效
+                    // 典型错误信息："An operation that depends on state cached in an interface object was made but the state had changed since it was read from disk."
+                    const isStateError = err && (
+                        err.name === 'NotFoundError' ||
+                        err.name === 'InvalidStateError' ||
+                        (err.message && err.message.includes('state cached in an interface object'))
+                    );
+                    if (isStateError && reuseDirHandle) {
+                        errMsg = '目录句柄已失效，请点击重试重新选择文件夹';
                     }
                     item.saveStatus = 'fail';
                     item.saveError = errMsg;
@@ -3776,22 +3814,30 @@
                         this.disabled = true;
                         const oldText = this.textContent;
                         this.textContent = '⏳ 重试中...';
-                        const result = await saveSingleFile(id, dirHandle, false);
+                        // 重试策略：
+                        // 1. 先用原 dirHandle 重试（不强制选目录，因为点击事件算用户手势）
+                        // 2. 如果仍然报 InvalidStateError/NotFoundError，自动再试一次（forceNewDir 重新选目录）
+                        let result = await saveSingleFile(id, dirHandle, false);
+                        if (!result.success && result.error && (
+                            result.error.includes('缓存状态') ||
+                            result.error.includes('失效') ||
+                            result.error.includes('state cached')
+                        )) {
+                            // 句柄确实失效了，强制重新选目录再试一次
+                            result = await saveSingleFile(id, null, false, true);
+                        }
                         this.disabled = false;
                         this.textContent = oldText;
                         if (result.success) {
-                            // 从失败列表中移除这一项并重新渲染弹窗
                             const newFailList = failList.filter(f => f.item && f.item.id !== id);
                             if (newFailList.length === 0) {
                                 close();
                                 showToast('🎉 已全部重传成功', 'success', 2500);
                             } else {
-                                // 用新列表重新渲染
                                 failList.length = 0;
                                 failList.push(...newFailList);
-                                // 简单做法：关闭后重新打开
                                 close();
-                                showFailDetailModal(newFailList, dirHandle, downloadMode);
+                                showFailDetailModal(newFailList, null, downloadMode);
                             }
                         }
                     });
@@ -3803,9 +3849,21 @@
                     const oldText = this.textContent;
                     this.textContent = '⏳ 重试全部中...';
                     const stillFail = [];
+                    // forceNewDir=true：重试时强制重新选择目录（解决句柄失效 NotFoundError）
+                    // 先让用户选一次目录，然后复用这个新句柄
+                    let freshDirHandle = null;
+                    try {
+                        freshDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                    } catch (e) {
+                        if (e && e.name === 'AbortError') {
+                            this.disabled = false;
+                            this.textContent = oldText;
+                            return;
+                        }
+                    }
                     for (const f of failList) {
                         if (!f.item) continue;
-                        const r = await saveSingleFile(f.item.id, dirHandle, true);
+                        const r = await saveSingleFile(f.item.id, freshDirHandle, true);
                         if (!r.success && !r.aborted) stillFail.push(r);
                     }
                     this.disabled = false;
@@ -3815,7 +3873,7 @@
                         showToast('🎉 重试全部成功', 'success', 2500);
                     } else {
                         showToast(`仍有 ${stillFail.length} 个失败，详见弹窗`, 'error', 2500);
-                        showFailDetailModal(stillFail, dirHandle, downloadMode);
+                        showFailDetailModal(stillFail, freshDirHandle, downloadMode);
                     }
                 });
             }
@@ -4115,7 +4173,8 @@
                             Promise.all(entryList.map(entry => {
                                 if (entry.isDirectory) {
                                     // 文件夹：递归读取，prefix 用文件夹名（作为顶层 sourceFolder）
-                                    return traverseDirectoryWithTimeout(entry, outputFiles, entry.name);
+                                    // 传入 dt.files 作为兜底：Edge readEntries 失败时用 webkitRelativePath 恢复
+                                    return traverseDirectoryWithTimeout(entry, outputFiles, entry.name, files);
                                 } else if (entry.isFile) {
                                     // 单个文件：读取并设置 webkitRelativePath
                                     return new Promise(r => {
@@ -4150,16 +4209,21 @@
                                 addFiles(outputFiles);
                                 showToast(`📂 已添加 ${outputFiles.length} 个文件（来自 ${entryList.length} 个文件夹）`, 'success', 2000);
                             } else {
-                                // 降级：entries 读取失败（可能 Edge 中文路径 EncodingError）
-                                // 检查 dt.files 是否包含真实文件
-                                console.warn('[drop] entries 读取失败，尝试 dt.files 降级');
+                                // 降级：entries 读取失败（Edge 中文路径 EncodingError）
+                                // 用 dt.files + webkitRelativePath 做兜底（Edge 拖拽时 dt.files 包含所有文件）
+                                console.warn('[drop] entries 读取失败，尝试 dt.files + webkitRelativePath 降级');
                                 const realFiles = [];
                                 const virtualFolders = [];
                                 if (files && files.length > 0) {
                                     for (let i = 0; i < files.length; i++) {
                                         const f = files[i];
-                                        // 真实文件: size > 0 或有扩展名
-                                        if (f.size > 0 || (f.name && f.name.includes('.'))) {
+                                        // 关键：用 webkitRelativePath 判定——有这个属性且含斜杠 = 文件
+                                        const hasWRP = f.webkitRelativePath && f.webkitRelativePath.length > 0;
+                                        const hasExt = f.name && /\.[^.\\/]+$/.test(f.name);
+                                        const hasMime = f.type && f.type.length > 0;
+                                        // 文件夹特征：无 webkitRelativePath + size=0 + 无扩展名 + 无 MIME
+                                        const isLikelyFile = hasWRP || f.size > 0 || hasExt || hasMime;
+                                        if (isLikelyFile) {
                                             realFiles.push(f);
                                         } else {
                                             virtualFolders.push(f.name);
@@ -4167,11 +4231,9 @@
                                     }
                                 }
                                 if (realFiles.length > 0) {
-                                    // 成功找到真实文件
                                     addFiles(realFiles);
                                     showToast(`📂 已添加 ${realFiles.length} 个文件（降级模式）`, 'success', 2000);
                                 } else if (virtualFolders.length > 0) {
-                                    // 只有虚拟文件夹，没有真实文件
                                     showToast(`❌ Edge浏览器Bug：无法读取中文路径文件夹「${virtualFolders.join(', ')}」的内容。请点击 【📁 选择文件夹】 按钮替代拖拽`, 'error', 8000);
                                 } else {
                                     showToast('⚠️ 拖拽的文件夹读取失败，请点击「📁 选择文件夹」按钮', 'error', 5000);
@@ -4187,8 +4249,10 @@
                     const realFiles = [];
                     for (let i = 0; i < files.length; i++) {
                         const f = files[i];
-                        // 过滤虚拟文件夹
-                        if (f.size > 0 || (f.name && f.name.includes('.'))) {
+                        const hasWRP = f.webkitRelativePath && f.webkitRelativePath.length > 0;
+                        const hasExt = f.name && /\.[^.\\/]+$/.test(f.name);
+                        const hasMime = f.type && f.type.length > 0;
+                        if (hasWRP || f.size > 0 || hasExt || hasMime) {
                             realFiles.push(f);
                         }
                     }
@@ -4205,7 +4269,8 @@
             }
             
             // 带超时的目录遍历（Edge 中中文文件夹名会导致 readEntries 报 EncodingError）
-            function traverseDirectoryWithTimeout(entry, files, prefix) {
+            // 修复策略：readEntries 失败时改用 dt.files 中的 webkitRelativePath 来恢复
+            function traverseDirectoryWithTimeout(entry, files, prefix, topLevelFiles) {
                 return new Promise(resolve => {
                     const timeout = setTimeout(() => {
                         console.warn('[traverseDirectory] 子目录超时:', prefix);
@@ -4236,6 +4301,7 @@
                                         hasError = true;
                                     } else {
                                         console.warn('[traverseDirectory] readEntries 错误:', err);
+                                        hasError = true;
                                     }
                                     stopped = true;
                                     processAndResolve();
@@ -4250,24 +4316,20 @@
                         
                         async function processAndResolve() {
                             clearTimeout(timeout);
-                            // 如果没有条目且有错误，尝试降级方案
+                            // readEntries 失败：用 dt.files 的 webkitRelativePath 兜底恢复
                             if (allEntries.length === 0 && hasError) {
-                                console.log('[traverseDirectory] 降级: 尝试直接读取文件夹对象');
-                                // 尝试用 entry.file() 读取（某些 Edge 版本支持）
-                                if (entry.file) {
-                                    try {
-                                        entry.file(f => {
-                                            files.push(f);
-                                            console.log('[traverseDirectory] 降级成功:', f.name);
-                                            resolve();
-                                        }, err => {
-                                            console.warn('[traverseDirectory] 降级失败:', err);
-                                            resolve();
-                                        });
-                                        return;
-                                    } catch (_) {
-                                        resolve();
-                                        return;
+                                console.log('[traverseDirectory] readEntries 失败，尝试用 topLevelFiles 兜底');
+                                if (topLevelFiles && topLevelFiles.length > 0) {
+                                    // 从 topLevelFiles 中筛选出属于这个目录的文件
+                                    const matched = [];
+                                    for (const f of topLevelFiles) {
+                                        if (f.webkitRelativePath && f.webkitRelativePath.indexOf(prefix + '/') === 0) {
+                                            matched.push(f);
+                                        }
+                                    }
+                                    console.log('[traverseDirectory] 兜底匹配到', matched.length, '个文件');
+                                    for (const f of matched) {
+                                        files.push(f);
                                     }
                                 }
                                 resolve();
@@ -4277,7 +4339,7 @@
                             const promises = [];
                             for (const ent of allEntries) {
                                 if (ent.isDirectory) {
-                                    promises.push(traverseDirectoryWithTimeout(ent, files, prefix + '/' + ent.name));
+                                    promises.push(traverseDirectoryWithTimeout(ent, files, prefix + '/' + ent.name, topLevelFiles));
                                 } else if (ent.isFile) {
                                     promises.push(new Promise(r => {
                                         try {
@@ -4463,7 +4525,7 @@
                 }
             }, 1200);
 
-            console.log('📂 批量重命名工具（规范版）已启动 v2.7.1（同步练习"XX卷"内容直接去除）');
+            console.log('📂 批量重命名工具（规范版）已启动 v2.7.4（循环提取嵌套括号）');
             console.log('✏️ 可编辑序号、标题、类别、附加，预览实时更新');
             console.log('💡 Ctrl+Enter 快速下载；"保存到文件夹"按钮可无需打包直接写入目标目录');
         })();

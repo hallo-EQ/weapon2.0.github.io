@@ -1262,6 +1262,7 @@
                         <option value="分层作业">分层作业</option>
                         <option value="学习任务单">学习任务单</option>
                         <option value="导学案">导学案</option>
+                        <option value="同步练习">同步练习</option>
                         <option value="其他">其他</option>
                         <option value="">无（不写类别）</option>
                     </select>
@@ -1286,6 +1287,13 @@
                     <input type="text" id="autoIndexStart" value="1" style="width:56px;" placeholder="1" />
                 </label>
                 <button class="btn btn-apply btn-sm" id="btnAutoIndex">🔢 自动编号</button>
+                <span style="width:1px;height:20px;background:var(--gray-2);margin:0 4px;"></span>
+                <label>
+                    固定格式
+                    <input type="text" id="fixedIndexPattern" value="" style="width:64px;" placeholder="如: 2.1" />
+                </label>
+                <button class="btn btn-apply btn-sm" id="btnFixedIndex" title="输入编号模板（如 2.1），应用到全部时前缀固定、末位递增：2.1, 2.2, 2.3…">📌 固定格式</button>
+                <button class="btn btn-apply btn-sm" id="btnFixedIndexNoInc" title="所有文件使用同一个编号（不递增），如输入 2.1 → 全部为 2.1">📎 统一编号</button>
                 <button class="btn btn-apply btn-sm" id="btnAutoCategory">🤖 自动识别类别</button>
                 <button class="btn btn-apply btn-sm" id="btnSuffixNumber" title="批量给文件名末尾加 (1)(2) 等编号，用于同名文件区分">🔢 末尾编号</button>
                 <label style="display:inline-flex;align-items:center;gap:4px;margin-left:8px;font-size:13px;color:var(--text-2);cursor:pointer;">
@@ -1365,6 +1373,9 @@
             const autoIndexFormat = document.getElementById('autoIndexFormat');
             const autoIndexStart = document.getElementById('autoIndexStart');
             const btnAutoIndex = document.getElementById('btnAutoIndex');
+            const fixedIndexPattern = document.getElementById('fixedIndexPattern');
+            const btnFixedIndex = document.getElementById('btnFixedIndex');
+            const btnFixedIndexNoInc = document.getElementById('btnFixedIndexNoInc');
             const btnAutoCategory = document.getElementById('btnAutoCategory');
             const btnSuffixNumber = document.getElementById('btnSuffixNumber');
             const chapterDropZone = document.getElementById('chapterDropZone');
@@ -1409,6 +1420,7 @@
                 { keys: ['分层作业', '分层', '作业'], value: '分层作业' },
                 { keys: ['学习任务单', '任务单'], value: '学习任务单' },
                 { keys: ['导学案', '学案'], value: '导学案' },
+                { keys: ['同步练习'], value: '同步练习' },
             ];
 
             /**
@@ -1431,6 +1443,11 @@
                             return { value: rule.value, matchedKey: k };
                         }
                     }
+                }
+                // 泛化匹配："XX卷"（如 基础卷、提升卷、单元测试·基础卷、专题训练卷）→ 同步练习
+                const juanMatch = text.match(/(?:基础|提升|冲刺|过关|测试|练习|单元|专题|模拟|真题|押题|衔接|复习|同步|强化|阶段|课时|章节|周测|月考)?卷/);
+                if (juanMatch) {
+                    return { value: '同步练习', matchedKey: juanMatch[0] };
                 }
                 return null;
             }
@@ -1796,6 +1813,10 @@
                     return 'Unit ' + n;
                 });
 
+                // "XX卷"（同步练习类，如 单元测试·基础卷）括号内容直接从标题移除
+                // 类别已识别为"同步练习"，该内容不进书名号、也不作为待选项（版本关键字 A卷/B卷 已在前面前提取）
+                title = title.replace(/[（(【][^（）()【】]*卷[^（）()【】]*[)）】]/g, ' ').replace(/\s+/g, ' ').trim();
+
                 // 从 title 中提取书名号内括号内容，生成 innerBrackets 待选项
                 // 智能默认：类别关键字 selected=false（已识别为类别括号）；其他 selected=true
                 const innerBrackets = extractInnerBrackets(title);
@@ -1930,7 +1951,14 @@
                     // 判断 placement 和 selected
                     const catResult = detectCategoryFromText(trimmed);
                     const isVersionKw = versionKeywordList.some(kw => trimmed.includes(kw));
-                    
+
+                    // "XX卷"（同步练习类，如 单元测试·基础卷）→ 直接丢弃：不进书名号、不放类别后
+                    // （版本关键字 A卷/B卷 除外，仍按版本关键字走 extraBrackets）
+                    if (trimmed.includes('卷') && !isVersionKw) {
+                        console.log('[extractInnerBrackets] 丢弃同步练习卷内容:', trimmed);
+                        continue;
+                    }
+
                     console.log('[extractInnerBrackets] processing:', {
                         text: trimmed,
                         isCategory: !!catResult,
@@ -2345,6 +2373,7 @@
                                 <option value="分层作业" ${item.category === '分层作业' ? 'selected' : ''}>分层作业</option>
                                 <option value="学习任务单" ${item.category === '学习任务单' ? 'selected' : ''}>学习任务单</option>
                                 <option value="导学案" ${item.category === '导学案' ? 'selected' : ''}>导学案</option>
+                                <option value="同步练习" ${item.category === '同步练习' ? 'selected' : ''}>同步练习</option>
                                 <option value="其他" ${item.category === '其他' ? 'selected' : ''}>其他</option>
                                 <option value="" ${item.category === '' ? 'selected' : ''}>无（不写类别）</option>
                             </select>
@@ -2703,7 +2732,8 @@
                     // （类别关键字已被移除，剩余内容保留）
                     let innerBracketsClean = (innerBrackets || []).slice();
                     let category = globalCategory.value;
-                    const detected = detectCategory(nameForParse);
+                    // 类别识别：先扫描文件名，再扫描来源文件夹名（括号内容常在文件夹名中，如"第1章（单元测试·基础卷）"）
+                    const detected = detectCategory(nameForParse) || (sourceFolder ? detectCategory(sourceFolder) : null);
                     if (detected) {
                         category = detected.value;
                         // 把命中类别的那一项从 extraBrackets 里剥离（大小写不敏感），避免重复输出
@@ -2811,6 +2841,64 @@
             }
 
             /**
+             * 固定格式编号：以输入的编号为模板，前缀固定、末位递增
+             * 如输入 2.1 → 2.1, 2.2, 2.3…
+             * 如输入 2-1 → 2-1, 2-2, 2-3…
+             * 如输入 2.1.1 → 2.1.1, 2.1.2, 2.1.3…
+             * 如输入 5 → 5, 6, 7…
+             */
+            function applyFixedIndex() {
+                if (fileItems.length === 0) {
+                    showToast('⚠️ 没有文件可编号', 'info');
+                    return;
+                }
+                const pattern = (fixedIndexPattern.value || '').trim();
+                if (!pattern) {
+                    showToast('⚠️ 请输入编号模板，如 2.1', 'info');
+                    fixedIndexPattern.focus();
+                    return;
+                }
+                // 解析模板：可选前缀（以 . 或 - 结尾）+ 末位起始数字
+                const m = pattern.match(/^([\d]+(?:[.\-][\d]+)*[.\-])?(\d+)$/);
+                if (!m) {
+                    showToast('⚠️ 格式不正确，示例：2.1、2-1、2.1.1、5', 'error');
+                    fixedIndexPattern.focus();
+                    return;
+                }
+                const prefix = m[1] || '';
+                const start = parseInt(m[2], 10);
+
+                fileItems.forEach((item, i) => {
+                    item.index = prefix + (start + i);
+                });
+                renderList();
+                showToast(`📌 已固定格式 ${prefix}X 从 ${start} 开始编号`, 'success', 1800);
+            }
+
+            /**
+             * 统一编号：所有文件使用同一个编号（不递增）
+             * 如输入 2.1 → 全部文件序号都是 2.1
+             */
+            function applyFixedIndexNoIncrement() {
+                if (fileItems.length === 0) {
+                    showToast('⚠️ 没有文件可编号', 'info');
+                    return;
+                }
+                const pattern = (fixedIndexPattern.value || '').trim();
+                if (!pattern) {
+                    showToast('⚠️ 请输入编号，如 2.1', 'info');
+                    fixedIndexPattern.focus();
+                    return;
+                }
+                // 原样应用到全部，不做递增
+                fileItems.forEach(item => {
+                    item.index = pattern;
+                });
+                renderList();
+                showToast(`📎 已将编号 ${pattern} 统一应用到全部（不递增）`, 'success', 1800);
+            }
+
+            /**
              * 自动识别类别：扫描所有文件名关键字，匹配则覆盖类别并剥离重复关键字
              * 已有手动指定的类别会被识别结果覆盖；未识别的行保持不变
              */
@@ -2821,7 +2909,8 @@
                 }
                 let matched = 0;
                 fileItems.forEach(item => {
-                    const detected = detectCategory(item.originalName);
+                    // 先扫描文件名，再扫描来源文件夹名（括号内容常在文件夹名中）
+                    const detected = detectCategory(item.originalName) || (item.sourceFolder ? detectCategory(item.sourceFolder) : null);
                     if (detected) {
                         item.category = detected.value;
                         // 从 extraBrackets 里剥离命中类别的那一项关键字（大小写不敏感），避免重复输出
@@ -4277,6 +4366,15 @@
             btnDownloadZipBig.addEventListener('click', downloadZip);
             applyGlobalBtn.addEventListener('click', applyGlobalToAll);
             btnAutoIndex.addEventListener('click', applyAutoIndex);
+            btnFixedIndex.addEventListener('click', applyFixedIndex);
+            btnFixedIndexNoInc.addEventListener('click', applyFixedIndexNoIncrement);
+            // 回车快捷触发固定格式编号
+            fixedIndexPattern.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    applyFixedIndex();
+                }
+            });
             btnAutoCategory.addEventListener('click', applyAutoCategory);
             btnSuffixNumber.addEventListener('click', showSuffixModal);
             btnSaveFolder.addEventListener('click', saveToFolder);
@@ -4365,7 +4463,7 @@
                 }
             }, 1200);
 
-            console.log('📂 批量重命名工具（规范版）已启动 v2.4（修饰词拆分+默认选中）');
+            console.log('📂 批量重命名工具（规范版）已启动 v2.7.1（同步练习"XX卷"内容直接去除）');
             console.log('✏️ 可编辑序号、标题、类别、附加，预览实时更新');
             console.log('💡 Ctrl+Enter 快速下载；"保存到文件夹"按钮可无需打包直接写入目标目录');
         })();
